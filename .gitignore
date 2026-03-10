@@ -1,0 +1,67 @@
+# C++
+**/cmake-build*/
+**/build*/
+**/*.so
+**/*.so.*
+
+# Python
+.DS_Store
+**/*.egg-info/
+**/__pycache__/
+**/.pytest_cache/
+**/*.pyc
+**/*.pb
+
+# IDE
+**/.idea/
+**/.vscode/
+!.vscode
+.cursor/
+
+# Simulation outputs
+**/output/*
+**/outputs/*
+**/videos/*
+**/wandb/*
+**/.neptune/*
+*.tmp
+
+# Logs and checkpoints
+**/logs/*
+**/runs/*
+**/recordings/*
+/.pretrained_checkpoints/
+
+# Deploy binaries
+*.obj
+*.mtl
+*.STL
+**/env.yaml
+
+# Docker/Singularity
+**/*.sif
+docker/artifacts/
+docker/cluster/exports/
+
+# Doc outputs
+**/docs/_build/*
+**/generated/*
+
+# Isaac Sim
+_isaac_sim*
+_repo
+_build
+.lastformat
+**/*.dmp
+**/.thumbs
+
+# Large media (demo videos stay local)
+*.mp4
+*.avi
+*.mov
+
+# Omniverse crash logs
+**/*.log*
+
+# Datasets
+datasets
