@@ -32,3 +32,4 @@ from .events import reset_skating_pose  # noqa: F401
 from .amp_obs import amp_observation_state  # noqa: F401
 from .skate_attachment import attach_skates_to_robot  # noqa: F401
 from .curriculums import skating_lin_vel_cmd_levels, skating_ang_vel_cmd_levels  # noqa: F401
+from .eureka_rewards import eureka_task_reward  # noqa: F401

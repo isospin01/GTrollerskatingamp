@@ -1,8 +1,8 @@
-"""Script to train roller-skating RL agent with AMP + RSL-RL PPO.
+"""Script to train roller-skating RL agent with RSL-RL PPO.
 
 This script is nearly identical to scripts/rsl_rl/train.py but uses the
 AmpOnPolicyRunner instead of the standard OnPolicyRunner so that the AMP
-discriminator is properly initialised and updated during training.
+discriminator can optionally be used.
 
 Usage (Phase 1 — gliding balance):
     conda activate env_isaaclab
@@ -13,21 +13,18 @@ Usage (Phase 1 — gliding balance):
         --logger wandb --log_project_name g1_skating \\
         --experiment_name skating_phase1
 
-Usage (Phase 2 — push-off, resume from Phase 1):
+Usage (Eureka Phase 2+ — full skating, driven by LLM reward):
+    # Normally launched automatically by eureka_phase2.py.
+    # Can also be run manually with a pre-written reward function:
+    EUREKA_REWARD_FN_PATH=path/to/reward_fn.py \\
     python scripts/skating/train.py \\
-        --task Unitree-G1-Skating-Phase2-v0 \\
-        --num_envs 4096 --headless \\
-        --resume --load_run skating_phase1 \\
-        --logger wandb --log_project_name g1_skating \\
-        --experiment_name skating_phase2
+        --task Unitree-G1-Skating-Eureka-v0 \\
+        --num_envs 2048 --headless \\
+        --resume --load_experiment skating_phase1 \\
+        --experiment_name eureka_manual
 
-Usage (Phase 3 — full velocity + turning, resume from Phase 2):
-    python scripts/skating/train.py \\
-        --task Unitree-G1-Skating-Phase3-v0 \\
-        --num_envs 4096 --headless \\
-        --resume --load_run skating_phase2 \\
-        --logger wandb --log_project_name g1_skating \\
-        --experiment_name skating_phase3
+    # Full Eureka loop (recommended):
+    python scripts/skating/eureka_phase2.py --phase1_run skating_phase1
 """
 
 import gymnasium as gym
@@ -50,10 +47,8 @@ sys.path.pop(0)
 
 _VALID_TASKS = [
     "Unitree-G1-Skating-Phase1-v0",
-    "Unitree-G1-Skating-Phase2-v0",
-    "Unitree-G1-Skating-Phase3-v0",
-    "Unitree-G1-Skating-Phase3b-v0",
-    "Unitree-G1-Skating-Phase4-v0",
+    "Unitree-G1-Skating-Eureka-v0",
+    "Unitree-G1-Skating-AMP-v0",   # human-video style via GENMO + AMP discriminator
 ]
 
 parser = argparse.ArgumentParser(description="Train roller-skating RL agent (AMP + PPO).")
@@ -71,6 +66,14 @@ parser.add_argument(
     default=None,
     help="Override the experiment name used to locate the checkpoint for --resume. "
          "Use this to load weights from a *different* experiment (e.g. skating_phase1 → phase2).",
+)
+parser.add_argument(
+    "--resume_path",
+    type=str,
+    default=None,
+    help="Absolute path to a checkpoint .pt file.  Bypasses --resume / --load_experiment "
+         "lookup entirely.  Useful when the checkpoint lives outside the current logs/ tree "
+         "(e.g. loading a Phase 1 checkpoint from a different repo root).",
 )
 cli_args.add_rsl_rl_args(parser)
 AppLauncher.add_app_launcher_args(parser)
@@ -152,7 +155,13 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
     if isinstance(env.unwrapped, DirectMARLEnv):
         env = multi_agent_to_single_agent(env)
 
-    if agent_cfg.resume:
+    # Resolve the checkpoint path to load (if resuming)
+    resume_path = None
+    if args_cli.resume_path:
+        # Absolute path provided directly — bypass the logs/ tree lookup
+        resume_path = args_cli.resume_path
+        print(f"[INFO] Using explicit checkpoint path: {resume_path}")
+    elif agent_cfg.resume:
         # Allow loading from a different experiment's folder via --load_experiment
         load_exp = args_cli.load_experiment if args_cli.load_experiment else agent_cfg.experiment_name
         load_root = os.path.abspath(os.path.join("logs", "rsl_rl", load_exp))
@@ -180,7 +189,7 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
     runner = AmpOnPolicyRunner(env, train_dict, log_dir=log_dir, device=agent_cfg.device)
     runner.add_git_repo_to_log(__file__)
 
-    if agent_cfg.resume:
+    if resume_path is not None:
         print(f"[INFO]: Loading model checkpoint from: {resume_path}")
         runner.load(resume_path)
 

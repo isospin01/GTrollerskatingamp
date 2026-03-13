@@ -1,8 +1,10 @@
 """Record demo footage of the trained skating policy.
 
+Defaults to Phase 4 checkpoint (model_14000.pt) — straight-line skating at up to 3.5 m/s.
+
 Presets:
-  --clip straight   → vx=0.8, yaw=0.0
-  --clip turning    → vx=0.5, yaw=0.4
+  --clip straight   → vx=3.0, yaw=0.0  (Phase 4 high-speed straight)
+  --clip slow       → vx=1.5, yaw=0.0  (Phase 4 moderate speed)
 
 Or supply custom commands directly:
   --vx 2.0 --wz 0.0
@@ -12,11 +14,15 @@ Cam:  Side-tracking at world-frame offset [0, -4, 1.2], 60° FOV,
       follows robot position but does NOT rotate with yaw.
 
 Usage:
-    cd /home/muchenxu/unitree_rl_lab
+    cd /home/muchenxu/rollerskating
 
-    # Custom from-rest forward demo
+    # Phase 4 high-speed straight (default)
     conda run -n env_isaaclab python scripts/skating/record_demo.py \
-        --vx 2.0 --wz 0.0 --duration 40 --name demo_forward --headless
+        --clip straight --duration 40 --name phase4_straight_3ms --headless
+
+    # Custom velocity
+    conda run -n env_isaaclab python scripts/skating/record_demo.py \
+        --vx 3.5 --wz 0.0 --duration 40 --name phase4_max_speed --headless
 """
 
 import pathlib
@@ -30,20 +36,20 @@ import argparse
 from isaaclab.app import AppLauncher
 
 parser = argparse.ArgumentParser(description="Record demo footage of skating policy.")
-parser.add_argument("--clip", choices=["straight", "turning"], default=None,
-                    help="Preset clip. Overridden by --vx/--wz if provided.")
+parser.add_argument("--clip", choices=["straight", "slow", "amp"], default=None,
+                    help="Preset clip. 'amp' = AMP policy (human-style skating). Overridden by --vx/--wz if provided.")
 parser.add_argument("--vx", type=float, default=None, help="Forward velocity command (m/s).")
 parser.add_argument("--wz", type=float, default=None, help="Yaw rate command (rad/s).")
-parser.add_argument("--duration", type=float, default=65.0, help="Episode length in seconds.")
+parser.add_argument("--duration", type=float, default=40.0, help="Episode length in seconds.")
 parser.add_argument("--name", type=str, default=None, help="Output filename stem (no extension).")
 parser.add_argument("--output_dir", type=str, default="/home/muchenxu/rollerskating")
 parser.add_argument(
-    "--checkpoint", type=str, default="model_8000.pt",
+    "--checkpoint", type=str, default="model_14000.pt",
     help="Checkpoint filename inside the latest run dir.",
 )
 parser.add_argument(
-    "--log_dir", type=str, default="skating_phase3",
-    help="Experiment folder name under logs/rsl_rl/ (e.g. skating_phase3b).",
+    "--log_dir", type=str, default="skating_phase4",
+    help="Experiment folder name under logs/rsl_rl/ (e.g. skating_phase4).",
 )
 AppLauncher.add_app_launcher_args(parser)
 args_cli, extra = parser.parse_known_args()
@@ -72,8 +78,9 @@ import unitree_rl_lab.tasks  # noqa: F401 — registers gym envs
 # ─── Constants ───────────────────────────────────────────────────────────────
 
 CLIP_CFG = {
-    "straight": {"lin_vel_x": 0.8, "ang_vel_z": 0.0},
-    "turning":  {"lin_vel_x": 0.5, "ang_vel_z": 0.4},
+    "straight": {"lin_vel_x": 3.0, "ang_vel_z": 0.0},  # Phase 4 high-speed straight
+    "slow":     {"lin_vel_x": 1.5, "ang_vel_z": 0.0},  # Phase 4 moderate speed
+    "amp":      {"lin_vel_x": 2.0, "ang_vel_z": 0.0},  # AMP human-style skating
 }
 
 CAM_OFFSET = np.array([0.0, -4.0, 1.2])
@@ -131,17 +138,24 @@ def output_stem():
     if args_cli.name:
         return args_cli.name
     if args_cli.clip:
-        return f"skating_phase3_{args_cli.clip}_raw"
+        return f"skating_{args_cli.clip}"
     return f"skating_vx{args_cli.vx:.1f}_wz{args_cli.wz or 0.0:.1f}"
 
 
-def build_env_cfg(vx: float, wz: float, duration: float):
-    """Create a Phase 3 env config with demo-specific overrides."""
-    from unitree_rl_lab.tasks.skating.robots.g1_29dof.skating_env_cfg import (
-        G1SkatingFullEnvCfg,
-    )
-
-    cfg = G1SkatingFullEnvCfg()
+def build_env_cfg(vx: float, wz: float, duration: float, task: str = "phase4"):
+    """Create env config with demo-specific overrides."""
+    if task == "amp":
+        from unitree_rl_lab.tasks.skating.robots.g1_29dof.amp_env_cfg import (
+            G1SkatingAMPEnvCfg,
+        )
+        cfg = G1SkatingAMPEnvCfg()
+    else:
+        try:
+            from unitree_rl_lab.tasks.skating.robots.g1_29dof.skating_env_cfg import G1SkatingPhase4EnvCfg
+            cfg = G1SkatingPhase4EnvCfg()
+        except ImportError:
+            from unitree_rl_lab.tasks.skating.robots.g1_29dof.eureka_env_cfg import G1SkatingEurekaEnvCfg
+            cfg = G1SkatingEurekaEnvCfg()
 
     cfg.scene.num_envs = 1
     cfg.episode_length_s = duration
@@ -179,27 +193,35 @@ def build_env_cfg(vx: float, wz: float, duration: float):
 
 def main():
     vx, wz = resolve_commands()
-    env_cfg = build_env_cfg(vx, wz, args_cli.duration)
+    task = "amp" if args_cli.clip == "amp" else "phase4"
+    if task == "amp":
+        if args_cli.log_dir == "skating_phase4":
+            args_cli.log_dir = "skating_amp"
+        if args_cli.checkpoint == "model_14000.pt":
+            args_cli.checkpoint = "model_4998.pt"
+    env_cfg = build_env_cfg(vx, wz, args_cli.duration, task=task)
 
     # ── Create environment ───────────────────────────────────────────────────
+    gym_name = "Unitree-G1-Skating-AMP-v0" if task == "amp" else "Unitree-G1-Skating-Eureka-v0"
     gym_env = gym.make(
-        "Unitree-G1-Skating-Phase3-v0",
+        gym_name,
         cfg=env_cfg,
         render_mode="rgb_array",
     )
     base_env = gym_env.unwrapped
     sim = base_env.sim
 
-    from unitree_rl_lab.tasks.skating.agents.rsl_rl_ppo_cfg import (
-        SkatingPhase3PPORunnerCfg,
-    )
-    agent_cfg = SkatingPhase3PPORunnerCfg()
+    from unitree_rl_lab.tasks.skating.agents.rsl_rl_ppo_cfg import SkatingAMPPPORunnerCfg
+    try:
+        from unitree_rl_lab.tasks.skating.agents.rsl_rl_ppo_cfg import SkatingPhase4PPORunnerCfg
+    except ImportError:
+        from unitree_rl_lab.tasks.skating.agents.rsl_rl_ppo_cfg import SkatingEurekaPPORunnerCfg as SkatingPhase4PPORunnerCfg
+    agent_cfg = SkatingAMPPPORunnerCfg() if task == "amp" else SkatingPhase4PPORunnerCfg()
     rsl_env = RslRlVecEnvWrapper(gym_env, clip_actions=agent_cfg.clip_actions)
 
     # ── Load policy ──────────────────────────────────────────────────────────
-    log_root = os.path.join(
-        "/home/muchenxu/unitree_rl_lab", "logs", "rsl_rl", args_cli.log_dir,
-    )
+    log_base = "/home/muchenxu/rollerskating" if task == "amp" else "/home/muchenxu/unitree_rl_lab"
+    log_root = os.path.join(log_base, "logs", "rsl_rl", args_cli.log_dir)
     ckpt_path = get_checkpoint_path(log_root, "2026-.*", args_cli.checkpoint)
     print(f"[INFO] Checkpoint: {ckpt_path}")
 

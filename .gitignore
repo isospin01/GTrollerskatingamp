@@ -65,3 +65,7 @@ _build
 
 # Datasets
 datasets
+
+# Regeneratable artifacts (retarget workdir, Eureka outputs)
+/data/
+/eureka_output/

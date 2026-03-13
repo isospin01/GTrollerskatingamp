@@ -1,14 +1,15 @@
 """Roller-skating task module for Unitree humanoids.
 
-Provides three phase-progressive training environments for the Unitree G1-29DOF:
+Two registered environments:
 
-  Unitree-G1-Skating-Phase1-v0  — Gliding balance on low-friction rink
-  Unitree-G1-Skating-Phase2-v0  — Push-off learning with AMP reference motion
-  Unitree-G1-Skating-Phase3-v0  — Full velocity + turning commands (lean-to-steer)
+  Unitree-G1-Skating-Phase1-v0
+    Gliding balance on low-friction rink. Hand-designed reward, no AMP.
+    Run: python scripts/skating/train.py --task Unitree-G1-Skating-Phase1-v0
 
-Usage:
-    python scripts/rsl_rl/train.py --task Unitree-G1-Skating-Phase1-v0 \\
-        --num_envs 4096 --headless --logger wandb --log_project_name g1_skating
+  Unitree-G1-Skating-Eureka-v0
+    Full skating (push-off, speed, turning) with reward proposed by Eureka
+    (LLM-driven reward search). Reward function injected via EUREKA_REWARD_FN_PATH.
+    Run: python scripts/skating/eureka_phase2.py --phase1_run skating_phase1
 """
 
 # Import submodules to trigger gym registration

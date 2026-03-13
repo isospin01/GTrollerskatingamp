@@ -1,407 +1,411 @@
 # Unitree G1 Roller-Skating RL — Project Status
 
-**Last updated:** 2026-03-10 (Phase 4 straight-line skating COMPLETE)
+**Last updated:** 2026-03-12  
+**Current phase:** AMP PPO (human-video style guidance) — **training in progress** 🏃
 
 ---
 
 ## 1. Project Goal
 
-Train a **Unitree G1 29-DOF humanoid robot** to roller-skate using deep reinforcement learning in NVIDIA Isaac Sim. The target behaviours are:
+Train a **Unitree G1 29-DOF humanoid robot** to roller-skate using deep reinforcement learning in NVIDIA Isaac Sim. Target behaviours:
 
-1. Stay upright on roller skates while gliding
-2. Self-propel from rest using alternating push-off strides
-3. Skate in a straight line at up to ~3.5 m/s
-4. (Future) Track turning commands using lean-to-steer edge control
+1. Stay upright on roller skates while gliding ✅ **DONE (Phase 1)**
+2. Self-propel from rest using alternating push-off strides ← **AMP target (in training)**
+3. Skate in a straight line at up to ~3.5 m/s ← **AMP target**
+4. Track turning commands using lean-to-steer edge control ← **AMP target**
 
 ---
 
-## 2. Stack
+## 2. Architecture
+
+### Original design (Phases 1–4, hand-designed rewards)
+Phase 1 → Phase 2 (AMP push-off) → Phase 3/3b (turning) → Phase 4 (straight-line speed)
+
+### Current design (as of 2026-03-12)
+**Phase 1 (complete) → AMP PPO (human-video style, active) ‖ Eureka loop (paused)**
+
+Two parallel tracks have been developed:
+
+- **AMP track** — Human skating motion extracted from a YouTube video via GVHMR (GENMO's video backbone), retargeted to G1 kinematics, and used as a discriminator reference for AMP PPO. Currently training.
+- **Eureka track** — LLM-driven reward search (GPT-5.4 proposes `compute_reward()` functions). Infrastructure complete; paused while AMP track runs.
+
+---
+
+## 3. Stack
 
 | Component | Details |
 |---|---|
-| Simulator | NVIDIA Isaac Lab / Isaac Sim 5.0 |
+| Simulator | NVIDIA Isaac Lab / Isaac Sim 5.1.0 |
 | Robot | Unitree G1 29-DOF (`g1_29dof_nohand-feet_sphere.usd`) |
 | RL algorithm | RSL-RL PPO (`AmpOnPolicyRunner`) |
-| Style guidance | AMP (Adversarial Motion Priors) — Phase 2+ |
+| Reward search | NVIDIA Eureka — LLM proposes `compute_reward()` functions |
+| LLM model | GPT-5.4 (OpenAI, released 2026-03-05) — default; also supports Claude, Gemini |
 | Logging | WandB project `g1_skating` |
-| GPU | NVIDIA RTX 6000 Ada Generation (GPU 0, 48 GB) — single GPU |
+| GPUs | 8× NVIDIA RTX 6000 Ada (48 GB each) — shared server |
 | Python env | `conda env: env_isaaclab` |
+| Repo | `/home/muchenxu/rollerskating/` |
 
 ---
 
-## 3. Key Source Files
+## 4. Key Source Files
 
 ```
-unitree_rl_lab/
+rollerskating/
 ├── scripts/skating/
-│   ├── train.py                   # Main training entry point
-│   ├── play.py                    # Eval + video recording
-│   ├── record_demo.py             # Custom demo footage with camera tracking
-│   ├── gen_skating_reference.py   # Generate AMP reference motion NPZ
-│   ├── run_phase1.sh / run_phase2.sh / run_phase3.sh
-│   └── run_eval.sh
+│   ├── train.py                    # Training entry point (Phase 1 + Eureka + AMP)
+│   ├── play.py                     # Eval + video recording
+│   ├── record_demo.py              # Demo footage with camera tracking
+│   ├── gen_skating_reference.py    # Analytical AMP reference motion generator
+│   ├── smpl_to_g1_retarget.py      # ★ SMPL→G1 kinematic retargeter
+│   ├── retarget_video_to_amp.py    # ★ End-to-end pipeline: YouTube URL → AMP .npz
+│   ├── eureka_phase2.py            # Eureka orchestration loop (LLM → train → eval)
+│   ├── eureka_prompts.py           # LLM prompt templates
+│   ├── run_eureka.sh               # One-command Eureka launcher
+│   └── run_phase1.sh
 │
 ├── source/unitree_rl_lab/unitree_rl_lab/
 │   ├── assets/robots/unitree.py               # UNITREE_G1_29DOF_SKATE_CFG
 │   ├── tasks/skating/
-│   │   ├── robots/g1_29dof/skating_env_cfg.py  # Phase 1–4 env configs
+│   │   ├── robots/g1_29dof/
+│   │   │   ├── skating_env_cfg.py             # Phase 1 env config (shared components)
+│   │   │   ├── eureka_env_cfg.py              # Eureka env (injectable reward)
+│   │   │   └── amp_env_cfg.py                 # ★ AMP env (fixed task rewards + discriminator)
 │   │   ├── mdp/
-│   │   │   ├── skate_attachment.py  # USD skate geometry + collision
-│   │   │   ├── rewards.py           # Custom skating reward functions
-│   │   │   ├── curriculums.py       # Skating-specific curriculum (lower threshold)
-│   │   │   ├── events.py            # reset_skating_pose + domain rand
-│   │   │   ├── amp_obs.py           # AMP discriminator observation (85-dim)
+│   │   │   ├── rewards.py                     # Hand-crafted reward helpers
+│   │   │   ├── eureka_rewards.py              # Dynamic reward injection
+│   │   │   ├── skate_attachment.py
+│   │   │   ├── curriculums.py
+│   │   │   ├── events.py
+│   │   │   ├── amp_obs.py                     # 85-dim AMP state vector
 │   │   │   └── observations.py
 │   │   └── agents/
-│   │       ├── amp_runner.py
-│   │       └── rsl_rl_ppo_cfg.py
-│   └── data/skating_reference.npz  # AMP reference motion (18000 × 85)
+│   │       ├── amp_runner.py                  # AmpOnPolicyRunner (PPO + discriminator)
+│   │       └── rsl_rl_ppo_cfg.py              # Phase 1 + Eureka + AMP PPO configs
+│   └── data/
+│       ├── skating_reference.npz              # Analytical AMP reference (18000 × 85)
+│       └── skating_reference_human.npz        # ★ Human-video AMP reference (T × 85)
 │
-├── tests/skating/
-│   ├── test_skate_physics.py       # Wheel geometry + collision API tests
-│   ├── test_config_consistency.py  # Phase clock, critic cfg, height checks
-│   ├── test_amp_and_reference.py   # AMP obs dim + NPZ validity
-│   └── test_reset_and_rewards.py   # Velocity frame rotation + reward logic
+├── logs/rsl_rl/
+│   └── skating_amp/2026-03-11_21-04-26/       # ★ Active AMP training run
+│       ├── model_2100.pt                      # Latest checkpoint (iter 2100/3000)
+│       └── events.out.tfevents.*              # TensorBoard (also mirrored to W&B)
 │
-└── logs/rsl_rl/
-    ├── skating_phase1/2026-03-08_13-46-21/    # Phase 1 checkpoints
-    ├── skating_phase2/2026-03-08_15-39-53/    # Phase 2 checkpoints
-    ├── skating_phase3/
-    │   ├── 2026-03-08_16-42-56/               # Phase 3 run 1 (stopped early)
-    │   └── 2026-03-08_17-50-00/               # Phase 3 run 2 (COMPLETE)
-    ├── skating_phase3b/2026-03-09_11-39-02/   # Phase 3b curriculum fix (COMPLETE)
-    └── skating_phase4/2026-03-09_13-38-33/   # Phase 4 straight-line (COMPLETE)
+└── eureka_output/                             # Eureka run outputs
+    ├── iter_0/
+    │   ├── reward_fn.py                       # GPT-5.4-generated reward function
+    │   ├── llm_response.txt
+    │   ├── training_stdout.txt
+    │   └── train_summary.json
+    └── eureka_summary.json
+```
+
+★ = new files added in the AMP integration (2026-03-12)
+
+---
+
+## 5. Phase 1 — Gliding Balance (COMPLETE ✅)
+
+**Checkpoint:** `/home/muchenxu/unitree_rl_lab/logs/rsl_rl/skating_phase1/2026-03-08_13-46-21/model_1999.pt`
+
+| Metric | Value |
+|---|---|
+| Iterations | 2,000 / 2,000 |
+| Wall time | 1h 22m |
+| Final reward | 58.5 |
+| Episode length | 701 steps (~14s) |
+| forward_velocity reward | 4.19 |
+| Fall rate | ~0.6% |
+| Undesired contacts | **0.000** (wheels only) |
+| Speed range trained | 0.5–1.5 m/s (glide, pre-injected velocity) |
+
+**What the robot learned:** Balance upright on roller skates, maintain ~0.85m bent-knee posture, track forward velocity passively, resist random pushes. Does NOT push off from rest.
+
+---
+
+## 6. AMP Phase — Human-Video Style Guidance (IN TRAINING 🔄)
+
+### Concept
+
+```
+r_total = 0.5 × r_task  +  0.5 × r_AMP
+r_AMP   = −log(1 − σ(D(s_AMP)))   ∈ [0, ~9]
+```
+
+The AMP discriminator is trained **simultaneously** with the PPO policy (GAN-style). It learns to distinguish real human skating frames from robot-generated frames, and its output is used as a reward signal that teaches the robot *how* to skate (style) while task rewards define *what* to achieve (speed/balance).
+
+### Pipeline: YouTube → AMP Reference
+
+```
+YouTube URL (human skating video)
+    │
+    ▼  yt-dlp + ffmpeg
+Video frames (1280×720, 30fps)
+    │
+    ▼  GVHMR (gvhmr conda env) — GENMO's video backbone
+hmr4d_results.pt  (SMPL body_pose, global_orient, transl per frame)
+    │
+    ▼  SMPLtoG1Retargeter  (scripts/skating/smpl_to_g1_retarget.py)
+G1 joint angles (29-DOF) + base pose + velocities
+    │
+    ▼  build_amp_obs()
+skating_reference_human.npz  (T × 85 AMP observation array)
+```
+
+**Video source:** [https://www.youtube.com/shorts/4b-bjwTWPRA](https://www.youtube.com/shorts/4b-bjwTWPRA)
+
+### AMP Environment (`Unitree-G1-Skating-AMP-v0`)
+- **Commands:** 0.3–3.5 m/s forward + ±0.8 rad/s turning (curriculum-expanded, same as Eureka)
+- **Task rewards:** alive, forward_velocity (exp kernel), upright, height, energy, smoothness, contacts
+- **Style reward:** AMP discriminator on 85-dim kinematic state
+- **Reset:** near-rest (0–0.5 m/s) — robot must push off, exactly like Eureka
+
+### Active Training Run
+
+| Property | Value |
+|---|---|
+| Log dir | `logs/rsl_rl/skating_amp/2026-03-11_21-04-26/` |
+| Resumed from | Phase 1 `model_1999.pt` |
+| Current iteration | ~2100 / 3000 |
+| GPU | `cuda:2` (RTX 6000 Ada, ~22 GB used, 100% util) |
+| W&B run | [g1_skating / 6q9t7yuf](https://wandb.ai/xupeter-university-of-southern-california/g1_skating/runs/6q9t7yuf) |
+| `task_reward_lerp` | 0.5 (equal blend) |
+| Discriminator | 2-layer MLP [1024, 512], leaky ReLU, lr=1e-4 |
+
+---
+
+## 7. Eureka Phase 2+ — LLM Reward Search (PAUSED ⏸)
+
+### How It Works
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│  eureka_phase2.py  (runs in base Python, no Isaac Sim needed)   │
+│                                                                  │
+│  for iter in range(N):                                           │
+│    1. Call GPT-5.4 → generate compute_reward(env) function      │
+│    2. Write reward_fn.py, set EUREKA_REWARD_FN_PATH env var     │
+│    3. Launch train.py subprocess (env_isaaclab Python)           │
+│       └─ Isaac Lab loads reward fn via eureka_rewards.py         │
+│       └─ Resumes from Phase 1 model_1999.pt                      │
+│    4. Wait 30s → launch play.py on best-free GPU for eval        │
+│    5. Feed metrics back to GPT-5.4 for next iteration            │
+│  Keep best policy across all iterations                          │
+└─────────────────────────────────────────────────────────────────┘
+```
+
+### Eureka Environment (`Unitree-G1-Skating-Eureka-v0`)
+- **Commands:** 0.3–3.5 m/s forward + ±0.8 rad/s turning (curriculum-expanded)
+- **Fixed structural rewards:** alive, upright, height, energy, smoothness, contacts
+- **Task reward:** `eureka_task` — calls LLM-generated `compute_reward()` dynamically
+- **Reset:** near-rest (0–0.5 m/s) — robot must push off to earn task reward
+
+### Fitness Function
+```
+fitness = 0.40 × survival_rate
+        + 0.35 × min(speed / 3.5, 1.0)
+        + 0.15 × lateral_quality
+        + 0.10 × episode_length / 20s
 ```
 
 ---
 
-## 4. Skate Physics Implementation
+## 8. Eureka Run History
 
-### The Core Bug That Started This
-The original `skate_attachment.py` only created **visual geometry** — no collision, no physics material. The robot was physically skating on its original sphere feet, not on wheels.
+### Run 1 — 5 iterations, GPT-4o (2026-03-11, FAILED ❌)
+All 5 iterations crashed: `ModuleNotFoundError: No module named 'gymnasium'`  
+**Root cause:** `_conda_python()` returned `sys.executable` (base Python) instead of `env_isaaclab` Python.  
+**Fix:** Auto-detect `env_isaaclab` Python via `conda run` or known miniconda paths.
 
-### Fix Applied (`skate_attachment.py`)
-The `attach_skates_to_robot` function now:
-1. Creates a shared `PhysxSchema.PhysxMaterialAPI` at `/World/Looks/SkateWheelMaterial` with:
-   - `static_friction = 0.02`, `dynamic_friction = 0.01`, `friction_combine_mode = "min"`
-2. Adds `SkateVisual/` subtree: boot mesh, 4 wheel cylinders, hub discs, frame rails
-3. Adds `SkateCollision/WheelFront` and `SkateCollision/WheelBack` — Y-axis cylinders with `UsdPhysics.CollisionAPI` bound to the wheel material
-4. Is **idempotent**: skips ankle links where `SkateVisual` already exists (prevents `AddTranslateOp already exists` crash from USD instancing)
-5. Uses `_set_xform_translate_scale()` helper which safely overwrites existing xform ops
+### Run 2 — GPT-5.4, 10 iterations (2026-03-11, PARTIAL ⚠️)
 
-### Robot Init Height Fix (`unitree.py`)
-`UNITREE_G1_29DOF_SKATE_CFG.init_state.pos.z` was raised from `0.84 m` → **`0.876 m`**:
-- Wheel bottom extends 0.126 m below ankle
-- Original sphere foot extends 0.050 m below ankle
-- Extra height needed: 0.076 m → `0.80 + 0.076 = 0.876 m`
-- This makes sphere feet float 0.076 m above ground so wheels are the only contact surface
+| Issue | Description | Fix |
+|---|---|---|
+| `max_tokens` API error | GPT-5.4 requires `max_completion_tokens`, not `max_tokens` | Auto-detect by model name prefix (`gpt-5.*` → `max_completion_tokens`) |
+| Temperature error | GPT-5.4 doesn't accept `temperature` parameter | Removed for reasoning models |
+| GPU OOM on eval | After training (2048 envs), only 1.5 GB VRAM free on GPU 0 | Auto-select GPU with most free memory; 30s cooldown; reduce eval_envs 64→32 |
+| Package not registered | `Unitree-G1-Skating-Eureka-v0` not found by `env_isaaclab` | **OPEN — see section 8** |
 
-### Proof Wheels Are the Contact Surface
-`undesired_contacts = 0.000` held across **all 2.8M+ training steps** across all three phases. Only ankle_roll links ever register contact forces.
+**Iter 0 LLM call:** GPT-5.4 generated reward function in **23.1s** (2741 input tokens, 1694 output tokens). The reward function covers: forward speed tracking, push-off rhythm, arm counter-swing, turning, glide continuity, and air-time incentive.
+
+**Iter 0 training:** Failed with `gymnasium.error.NameNotFound: Environment 'Unitree-G1-Skating-Eureka' doesn't exist`. The rollerskating package is not installed in `env_isaaclab`.
 
 ---
 
-## 5. All Bugs Fixed (Pre-Training)
+## 9. Package Install Note
+
+The `env_isaaclab` conda environment has an editable install that points to `~/unitree_rl_lab/source/unitree_rl_lab/` (not the rollerskating workspace). New task files must be synced there manually, or the editable install should be redirected.
+
+**Sync command (run after modifying any task file in rollerskating):**
+```bash
+DEST=~/unitree_rl_lab/source/unitree_rl_lab/unitree_rl_lab/tasks/skating
+SRC=~/rollerskating/source/unitree_rl_lab/unitree_rl_lab/tasks/skating
+rsync -av --exclude="__pycache__" --exclude="*.pyc" $SRC/ $DEST/
+rsync -av $SRC/../../../data/ ~/unitree_rl_lab/source/unitree_rl_lab/unitree_rl_lab/data/
+```
+
+All AMP files (`amp_env_cfg.py`, updated `__init__.py`, `rsl_rl_ppo_cfg.py`, `skating_reference_human.npz`) have already been synced as of 2026-03-12.
+
+---
+
+## 10. Reward Engineering Design
+
+### Fixed Structural Rewards (always active, not touched by LLM)
+| Term | Weight | Purpose |
+|---|---|---|
+| `is_alive` | +0.5 | Prevent instant-fall strategy |
+| `upright_orientation_l2` | -5.0 | Keep torso vertical |
+| `base_height_skating_l2` | -10.0 | Maintain 0.85m bent-knee posture |
+| `lateral_velocity_penalty` | -1.0 | Prevent sideways drift |
+| `skate_energy` | -2e-5 | Efficient joint usage |
+| `skate_action_rate` | -0.05 | Smooth joint trajectories |
+| `joint_acc_l2` | -2.5e-7 | Reduce jerk |
+| `dof_pos_limits` | -5.0 | Stay in joint limits |
+| `joint_deviation_arms` | -0.1 | Natural arm posture |
+| `joint_deviation_waist` | -0.5 | Natural waist posture |
+| `undesired_contacts` | -1.0 | Only wheels touch floor |
+
+### LLM-Generated Task Reward (`eureka_task`, weight=1.0)
+The LLM designs the task-specific component. GPT-5.4 iteration 0 proposed:
+- Forward speed tracking (exponential kernel + acceleration bonus)
+- Push-off rhythm (phase-clock based alternating contact)
+- Arm counter-swing reward (shoulders opposite to stance leg)
+- Turning command tracking
+- Glide continuity (momentum reward)
+- Air-time incentive (one foot off ground during push)
+
+### LLM Prompt Summary
+- **System:** Expert reward-function engineer for legged robot RL
+- **Context given:** All `env` Python attributes, all 29 joint names, contact sensor API, existing helpers available to import
+- **Task description:** What Phase 1 taught; what Phase 2 must achieve (push-off from rest)
+- **Feedback loop:** Previous reward code + training reward curve + eval metrics (speed, fall%, episode length)
+
+---
+
+## 11. Completed Bug Fixes (Pre-Eureka, original codebase)
 
 | # | Severity | File | Issue | Fix |
 |---|---|---|---|---|
 | 1 | **Critical** | `skate_attachment.py` | Visual-only geometry, no collision | Added `CollisionAPI` + wheel physics material |
 | 2 | **Critical** | `skating_env_cfg.py` | Phase clock period mismatch (1.0s vs 1.2s) | Set `push_off_rhythm` period to 1.2s |
-| 3 | **Critical** | `events.py` | Reset velocity injected in world-X ignoring robot yaw | Rotate `vx_body` by `dyaw` into world `vx/vy` |
-| 4 | Significant | `amp_obs.py` | Docstring claimed 89-dim, actual output 85-dim | Corrected to 85-dim |
-| 5 | Significant | `skating_env_cfg.py` | Phase 2 `glide_continuity` min_speed=0.8 with init_vel 0–0.3 | Override min_speed=0.3 in Phase 2 |
-| 6 | Moderate | `rewards.py` | `edge_contact` reward only checked contact, not ankle roll angle | Added ankle roll joint position measurement |
+| 3 | **Critical** | `events.py` | Reset velocity in world-X ignoring robot yaw | Rotate `vx_body` by `dyaw` into world frame |
+| 4 | Significant | `amp_obs.py` | Docstring claimed 89-dim, actual 85-dim | Corrected to 85-dim |
+| 5 | Significant | `skating_env_cfg.py` | Phase 2 `glide_continuity` min_speed=0.8 with init_vel 0–0.3 | Override min_speed=0.3 |
+| 6 | Moderate | `rewards.py` | `edge_contact` only checked contact, not ankle roll angle | Added ankle roll joint position |
 | 7 | Moderate | `skating_env_cfg.py` | `CriticCfg` missing `concatenate_terms = True` | Added in `__post_init__` |
-| 8 | Moderate | `gen_skating_reference.py` | Single-speed reference (0.8 m/s), insufficient for Phase 3 | Generated 6 speed variants (0.5–3.0 m/s), 18000 × 85 frames |
-| 9 | Minor | `skating_env_cfg.py` | Dead code `_REFERENCE_MOTION_NPZ` variable | Removed |
-| 10 | **Critical** | `unitree.py` + `skating_env_cfg.py` | Init height too low (0.84m), wheel penetrates ground | Raised to 0.876m; `base_height` target → 0.85m |
-| 11 | Runtime | `skate_attachment.py` | `AddTranslateOp` crash from USD instancing in multi-env | Added idempotency check + `_set_xform_translate_scale()` helper |
+| 8 | Moderate | `gen_skating_reference.py` | Single-speed AMP reference (0.8 m/s) | Multi-speed: 0.5–3.0 m/s, 18000×85 frames |
+| 9 | **Critical** | `unitree.py` | Init height too low (0.84m), wheels penetrate ground | Raised to 0.876m |
+| 10 | Runtime | `skate_attachment.py` | `AddTranslateOp` crash from USD instancing | Idempotency check + safe xform helper |
 
 ---
 
-## 6. Test Suite
+## 12. Bugs Fixed During Eureka Integration (2026-03-11)
 
-Location: `tests/skating/`  
-Results: **36/36 pure-Python tests pass. 5 tests skipped** (require Isaac Sim `pxr` libraries).
+| # | File | Issue | Fix |
+|---|---|---|---|
+| 1 | `eureka_phase2.py` | `_conda_python()` returned base Python (no Isaac Lab) | Auto-detect `env_isaaclab` via `conda run` |
+| 2 | `eureka_phase2.py` | GPT-5.4 doesn't accept `max_tokens` | Use `max_completion_tokens` for `gpt-5.*`, `o1*`, `o3*`, `o4*` |
+| 3 | `eureka_phase2.py` | GPT-5.4 doesn't accept `temperature` | Remove `temperature` for reasoning model prefixes |
+| 4 | `eureka_phase2.py` | Eval OOM: training consumes entire GPU, eval launches immediately | 30s sleep + auto-select GPU with most free VRAM |
+| 5 | `train.py` | No way to pass absolute checkpoint path across repos | Added `--resume_path` flag |
+| 6 | `eureka_phase2.py` | Checkpoint discovery picks `videos/` dir as latest run | Filter to `YYYY-MM-DD_HH-MM-SS` timestamp dirs only |
+| 7 | `source/.../robots/g1_29dof/__init__.py` | Old Phase 2–4 gym registrations still present | Replaced with `Eureka-v0` registration only |
 
-| File | What it tests |
-|---|---|
-| `test_skate_physics.py` | Wheel radius, friction values, CollisionAPI, material binding |
-| `test_config_consistency.py` | Phase clock period, CriticCfg, height geometry, dead code |
-| `test_amp_and_reference.py` | AMP obs dimension, NPZ keys/shape/speed coverage/FPS |
-| `test_reset_and_rewards.py` | Velocity frame rotation, speed magnitude, edge_contact reward logic |
+---
 
-Run with:
+## 13. Bugs Fixed During AMP Integration (2026-03-12)
+
+| # | File | Issue | Fix |
+|---|---|---|---|
+| 1 | `retarget_video_to_amp.py` | `infer_smpl_genmo` only caught `ImportError`, missing broader API failures | Broadened to `except Exception` |
+| 2 | `retarget_video_to_amp.py` | GENMO video estimation scripts not released; used GVHMR (GENMO's video backbone) instead | Subprocess call to GVHMR `demo.py` in dedicated `gvhmr` conda env |
+| 3 | `retarget_video_to_amp.py` | GVHMR output `hmr4d_results.pt` parsing needed axis-angle→numpy conversion | Added `torch.load` + rotation conversion logic |
+| 4 | `amp_env_cfg.py` | `forward_velocity_tracking_exp` missing `command_name` param | Added `command_name="base_velocity"` |
+| 5 | `amp_env_cfg.py` | Used `track_ang_vel_z_exp` which doesn't exist | Replaced with `ang_vel_z_l2` |
+| 6 | `robots/g1_29dof/__init__.py` | AMP env registration not visible to `env_isaaclab` (editable install points to different repo) | Manually synced all modified files to `~/unitree_rl_lab/source/` |
+
+---
+
+## 14. Original Phase Training History (Reference)
+
+### Phases 2–4 (superseded by Eureka approach)
+
+| Phase | Run dir | Best ckpt | Lin vel cmd | Key metric |
+|---|---|---|---|---|
+| Phase 2 | `skating_phase2/2026-03-08_15-39-53/` | `model_3400.pt` | 0.8–2.0 m/s | push_off=4.06, fall=0.1% |
+| Phase 3 | `skating_phase3/2026-03-08_17-50-00/` | `model_8000.pt` | stuck at 1.2 m/s | curriculum stall |
+| Phase 3b | `skating_phase3b/2026-03-09_11-39-02/` | `model_10000.pt` | 2.1 m/s | curriculum fix |
+| Phase 4 | `skating_phase4/2026-03-09_13-38-33/` | `model_14000.pt` | **3.5 m/s (max)** | full speed reached |
+
+Phase 4 achieved 3.5 m/s curriculum maximum with <0.1% fall rate. These checkpoints remain available but are superseded by the Eureka approach which will re-learn the same behaviors using LLM-designed rewards.
+
+---
+
+## 15. How to Run
+
+### AMP training (current)
 ```bash
-cd /home/muchenxu/unitree_rl_lab
-conda run -n env_isaaclab python -m pytest tests/skating/ -v
+cd /home/muchenxu/rollerskating
+conda run -n env_isaaclab python scripts/skating/train.py \
+  --task Unitree-G1-Skating-AMP-v0 \
+  --num_envs 2048 --headless \
+  --device cuda:2 \
+  --resume_path logs/rsl_rl/skating_amp/2026-03-11_21-04-26/model_2100.pt \
+  --experiment_name skating_amp \
+  --max_iterations 3000 \
+  --logger wandb --log_project_name g1_skating
 ```
 
----
+### Generate human reference from a new video
+```bash
+# Step 1: extract SMPL from video (uses gvhmr conda env)
+conda run -n env_isaaclab python scripts/skating/retarget_video_to_amp.py \
+  --video_url https://www.youtube.com/shorts/4b-bjwTWPRA \
+  --backend gvhmr \
+  --gvhmr_repo ~/gvhmr \
+  --out source/unitree_rl_lab/unitree_rl_lab/data/skating_reference_human.npz
 
-## 7. Multi-Phase Training Design
+# Step 2: sync to installed location
+rsync -av source/unitree_rl_lab/unitree_rl_lab/data/ \
+  ~/unitree_rl_lab/source/unitree_rl_lab/unitree_rl_lab/data/
+```
 
-### Phase 1 — Gliding Balance (`Unitree-G1-Skating-Phase1-v0`)
-- **Goal:** Stay upright on wheels, track forward velocity (0.5–1.5 m/s), no push-off
-- **Algorithm:** Pure PPO, no AMP
-- **Key rewards:** `forward_velocity` (5.0), `alive` (0.5), `glide_continuity` (2.0, min_speed=0.8), `upright` (-5.0), `base_height` (-10.0, target=0.85m)
-- **Episode length:** 15s
-- **Reset init velocity:** `x ∈ (0.5, 1.5)` m/s
+### Launch Eureka (paused)
+```bash
+cd /home/muchenxu/rollerskating
+export OPENAI_API_KEY=<your_key>
+bash scripts/skating/run_eureka.sh
+# Custom: MODEL=gpt-5.4 NUM_EUREKA_ITERS=10 TRAIN_ITERS=1500 bash scripts/skating/run_eureka.sh
+```
 
-### Phase 2 — Push-Off + AMP (`Unitree-G1-Skating-Phase2-v0`)
-- **Goal:** Learn alternating push-off stride from rest; AMP discriminator matches reference skating motion
-- **New reward:** `push_off_rhythm` (1.5), period=1.2s
-- **Reset init velocity:** `x ∈ (0.0, 0.3)` m/s (must self-propel)
-- **AMP reference:** `data/skating_reference.npz` — 18000 frames × 85-dim, 6 speed variants
-
-### Phase 3 — Full Velocity + Turning (`Unitree-G1-Skating-Phase3-v0`)
-- **Goal:** Track high-speed commands and turning; carve turns using ankle edge pressure
-- **New rewards:** `track_ang_vel` (2.5), `edge_contact` (1.0)
-- **Curriculum:** `lin_vel_cmd_levels` and `ang_vel_cmd_levels` — advance command range as reward improves
-- **Command range:** base `(0.3, 1.2)` m/s → curriculum up to `3.5` m/s
-- **Reset init velocity:** `x ∈ (0.0, 0.3)` m/s (robot must self-propel from rest)
-- **Episode length:** 20s
-- **Outcome:** Curriculum stuck at 1.2 m/s — threshold too strict for from-rest skating
-
-### Phase 3b — Curriculum Fix (`Unitree-G1-Skating-Phase3b-v0`)
-- **Goal:** Unblock the curriculum stall from Phase 3 by lowering the advancement threshold
-- **Root cause:** The locomotion curriculum requires `reward > weight × 0.8` to advance. For skating (start from rest), the from-rest acceleration phase drags the episode-average reward below 80% of theoretical max, making advancement impossible.
-- **Fix:** Skating-specific curriculum functions (`skating/mdp/curriculums.py`) with threshold `0.3` (was `0.8`) and step size `0.2` (was `0.1`)
-- **Warm-start:** `lin_vel_x = (0.3, 1.5)` since robot already handled 1.2 m/s
-- **Resumed from:** Phase 3 `model_8000.pt`
-- **Result:** Curriculum advanced from 1.2 → 2.1 m/s; stopped to focus on straight-line skating
-
-### Phase 4 — Straight-Line Skating Mastery (`Unitree-G1-Skating-Phase4-v0`)
-- **Goal:** Perfect straight-line skating at high speed; no turning
-- **Key changes from Phase 3b:**
-  - Removed all turning commands (`ang_vel_z = 0`)
-  - Removed `track_ang_vel` and `edge_contact` rewards
-  - Boosted `forward_velocity` weight from 6.0 → **8.0**
-  - Added `yaw_rate` penalty (weight -1.0) to keep robot straight
-- **Curriculum:** `skating_lin_vel_cmd_levels` only (threshold 0.3, step 0.2)
-- **Warm-start:** `lin_vel_x = (0.3, 2.3)` → limit `3.5` m/s
-- **Resumed from:** Phase 3b `model_10000.pt`
-
----
-
-## 8. Training Run History
-
-### Phase 1 (COMPLETE)
-| Item | Value |
-|---|---|
-| Run dir | `logs/rsl_rl/skating_phase1/2026-03-08_13-46-21/` |
-| Checkpoint | `model_1999.pt` |
-| Iterations | 2,000 |
-| Wall time | 1h 22m |
-| Final reward | 58.5 |
-| Episode length | 701 steps |
-| forward_velocity reward | 4.19 |
-| Fall rate | ~0.6% |
-| undesired_contacts | **0.000** |
-
-### Phase 2 (COMPLETE — stopped at convergence ~iter 3400)
-| Item | Value |
-|---|---|
-| Run dir | `logs/rsl_rl/skating_phase2/2026-03-08_15-39-53/` |
-| Best checkpoint | `model_3400.pt` |
-| Iterations from Phase 2 start | ~1,400 |
-| Final reward | 152.5 |
-| Episode length | 743 steps |
-| push_off reward | 4.06 |
-| Fall rate | ~0.1% |
-| undesired_contacts | **0.000** |
-
-### Phase 3 Run 1 (stopped early — only 600 iters, config issues)
-| Item | Value |
-|---|---|
-| Run dir | `logs/rsl_rl/skating_phase3/2026-03-08_16-42-56/` |
-| Best checkpoint | `model_4000.pt` |
-| Issue | Init vel (0–0.3) + command (0.5–2.0) gap too large; curriculum stuck at level 2 |
-
-### Phase 3 Run 2 — COMPLETE
-| Item | Value |
-|---|---|
-| Run dir | `logs/rsl_rl/skating_phase3/2026-03-08_17-50-00/` |
-| Loaded from | `model_4000.pt` (Phase 3 run 1) |
-| Max iterations | 10,000 (shown as 4000–14000) |
-| Final iteration | 8108/14000 (stopped — reward plateau) |
-| Best checkpoint | `model_8000.pt` |
-| Final reward | **~215** (plateau across iters 8000–8108) |
-| Episode length | ~990 steps (≈ 19.8s of 20s max) |
-| forward_velocity reward | 2.53 |
-| push_off reward | 4.97 |
-| track_ang_vel reward | 1.41 |
-| edge_contact reward | 0.002 |
-| undesired_contacts | **0.000** |
-| Curriculum lin_vel level | **1.2 m/s (STUCK — threshold too strict)** |
-| Curriculum ang_vel level | 0.3 rad/s |
-| Velocity tracking error (xy) | 1.25 m/s |
-| Velocity tracking error (yaw) | 0.81 rad/s |
-| Fall rate (bad_orientation) | ~0.1% |
-| Total timesteps | ~404M |
-| Wall time | 3h 8m |
-| Action noise std | 0.37 |
-| WandB run | `run-20260308_175104-1k05x86u` |
-
-### Phase 3b — Curriculum Fix (COMPLETE — stopped to focus on straight-line)
-| Item | Value |
-|---|---|
-| Run dir | `logs/rsl_rl/skating_phase3b/2026-03-09_11-39-02/` |
-| Loaded from | Phase 3 `model_8000.pt` |
-| Iterations | 8000–10128 (2128 new iterations) |
-| Best checkpoint | `model_10000.pt` |
-| Final reward | **~196** |
-| Episode length | ~991 steps |
-| forward_velocity reward | 1.17 |
-| push_off reward | 5.27 |
-| undesired_contacts | **0.000** |
-| Curriculum lin_vel level | **2.1 m/s** (was stuck at 1.2 in Phase 3) |
-| Curriculum ang_vel level | **0.8 rad/s** (maxed out) |
-| Velocity tracking error (xy) | 2.11 m/s |
-| Fall rate (bad_orientation) | ~0.3% |
-| Wall time | ~1h 48m |
-| WandB run | `run-20260309_114020-q1jlgd2t` |
-
-### Phase 4 — Straight-Line Skating (COMPLETE)
-| Item | Value |
-|---|---|
-| Run dir | `logs/rsl_rl/skating_phase4/2026-03-09_13-38-33/` |
-| Loaded from | Phase 3b `model_10000.pt` |
-| Iterations | 10000–14000 (4000 new iterations) |
-| Final checkpoint | `model_14000.pt` |
-| Final reward | **~194** |
-| Episode length | ~1000 steps (full 20s episodes) |
-| forward_velocity reward | 1.45 |
-| push_off reward | **5.60** (strongest across all phases) |
-| yaw_rate penalty | -0.24 |
-| undesired_contacts | **0.000** |
-| Curriculum lin_vel level | **3.5 m/s (maximum reached)** |
-| Velocity tracking error (xy) | 3.10 m/s |
-| Fall rate (bad_orientation) | ~0.08% |
-| Wall time | ~3h 30m |
-| WandB run | `run-20260309_134006-1ywv8hql` |
-
----
-
-## 9. Config Changes in Phase 3 Run 2 vs Run 1
-
-| Parameter | Run 1 | Run 2 |
-|---|---|---|
-| `Phase3CommandsCfg.ranges.lin_vel_x` | `(0.5, 2.0)` | `(0.3, 1.2)` — achievable from rest |
-| `Phase3CommandsCfg.limit_ranges.lin_vel_x` | `(0.3, 4.0)` | `(0.3, 3.5)` |
-| `Phase3RewardsCfg.forward_velocity.weight` | 5.0 | **6.0** |
-| `Phase3RewardsCfg.glide_continuity.min_speed` | 0.5 | **0.2** — reward during acceleration |
-| `Phase3RewardsCfg.track_ang_vel.weight` | 1.5 | **2.5** |
-| `Phase3RewardsCfg.edge_contact.weight` | 0.5 | **1.0** |
-| Init velocity | (0.0, 0.3) Phase 2 inherited | (0.0, 0.3) — **kept, start from rest** |
-
----
-
-## 10. Evaluation Results
-
-### Phase 3 Run 1 eval (broken — curriculum started at 0 in eval)
-- Mean forward speed: **0.053 m/s** — essentially standing still
-- Fall rate: 0.0%
-
-### Phase 1 eval with corrected params (good demo)
-- Checkpoint: `model_1999.pt`  
-- Init velocity overridden to 1.5 m/s, fixed command 1.5 m/s
-- Mean forward speed: **1.425 ± 0.078 m/s**
-- Lateral drift: 0.082 m/s
-- Fall rate: **0.0%**
-- Video: `/home/muchenxu/rollerskating/skating_gliding_1p5ms.mp4`
-
-### How to run eval correctly
+### Phase 1 eval
 ```bash
 cd /home/muchenxu/unitree_rl_lab
-
-# Demo video with a specific speed (Phase 1 — best glider)
 conda run -n env_isaaclab python scripts/skating/play.py \
   --task Unitree-G1-Skating-Phase1-v0 \
   --num_envs 16 --headless --video --video_length 600 \
-  --load_experiment skating_phase1 --load_run "2026-.*" \
+  --load_experiment skating_phase1 \
   --init_vel_x 1.5 --fixed_cmd_vel_x 1.5 \
   --eval_episodes 50
-
-# Full quantitative eval (Phase 3, from-rest)
-conda run -n env_isaaclab python scripts/skating/play.py \
-  --task Unitree-G1-Skating-Phase3-v0 \
-  --num_envs 64 --headless \
-  --load_experiment skating_phase3 --load_run "2026-.*" \
-  --eval_episodes 100
-```
-
-**Important:** For Phase 3 from-rest eval, the curriculum level resets to 0 in eval mode. This is fine — the base command range `(0.3, 1.2)` is already active from frame 1.
-
----
-
-## 11. How to Resume / Continue Training
-
-### Resume Phase 4 (if interrupted)
-```bash
-cd /home/muchenxu/unitree_rl_lab
-conda run -n env_isaaclab python scripts/skating/train.py \
-  --task Unitree-G1-Skating-Phase4-v0 \
-  --num_envs 4096 --headless \
-  --resume --load_experiment skating_phase4 --load_run "2026-.*" \
-  --logger wandb --log_project_name g1_skating \
-  --experiment_name skating_phase4
-```
-
-### Record demo footage (on a separate GPU)
-```bash
-cd /home/muchenxu/unitree_rl_lab
-CUDA_VISIBLE_DEVICES=1 conda run -n env_isaaclab python scripts/skating/record_demo.py \
-  --vx 2.5 --wz 0.0 --duration 40 \
-  --name phase4_forward \
-  --checkpoint model_XXXX.pt \
-  --log_dir skating_phase4 \
-  --headless
 ```
 
 ---
 
-## 12. Curriculum Stall Diagnosis & Fix
+## 16. Next Steps
 
-### The Problem (Phase 3)
-The velocity curriculum did **not advance** beyond its initial level:
-- `lin_vel_cmd_levels` stuck at **1.2 m/s** (target: 3.5 m/s)
-- `ang_vel_cmd_levels` stuck at **0.3 rad/s**
-
-**Root cause:** The locomotion curriculum in `curriculums.py` advances when `reward > weight × 0.8`. For `forward_velocity` (weight=6.0), this means a threshold of **4.8** per second. But the robot's actual reward was only **~2.54** — because each episode starts from rest and spends several seconds accelerating (with near-zero velocity tracking reward), dragging the episode average well below 80% of the theoretical maximum.
-
-### The Fix (Phase 3b → Phase 4)
-1. **Skating-specific curriculum** (`skating/mdp/curriculums.py`): threshold lowered from `0.8` to `0.3` (new threshold = 1.8, achievable), step size doubled from `0.1` to `0.2`
-2. **Phase 3b** unlocked the curriculum: 1.2 → 2.1 m/s in ~2000 iterations
-3. **Phase 4** focused entirely on straight-line speed (no turning), pushing curriculum to **2.7 m/s** and climbing
-
-### Curriculum Progression Timeline
-| Phase | lin_vel_cmd_levels | ang_vel_cmd_levels | Key Change |
-|---|---|---|---|
-| Phase 3 (iter 8108) | **1.2** (stuck) | 0.3 (stuck) | Threshold 0.8 too strict |
-| Phase 3b (iter 10128) | **2.1** | 0.8 (maxed) | Threshold lowered to 0.3 |
-| Phase 4 (iter 14000) | **3.5** (maximum) | N/A (no turning) | Straight-line focus |
+1. **[ACTIVE]** Wait for AMP training to complete (iter 3000) — monitor via [W&B](https://wandb.ai/xupeter-university-of-southern-california/g1_skating/runs/6q9t7yuf)
+2. **Evaluate AMP policy** — run `play.py` on `Unitree-G1-Skating-AMP-v0` with `model_3000.pt`; check push-off gait emergence vs Phase 1 passive glide
+3. **If AMP succeeds** — record demo video via `record_demo.py`; compare skating style to human reference video
+4. **If AMP stalls** — tune `task_reward_lerp` (try 0.3 to weight AMP more) or extend to 5000 iterations
+5. **Resume Eureka** — run Eureka loop on top of the best AMP checkpoint for speed/turning refinement (LLM reward on top of style reward)
 
 ---
 
-## 13. Known Issues / Next Steps
-
-1. **Phase 4 complete**: Straight-line skating curriculum reached maximum 3.5 m/s. Robot demonstrates robust push-off from rest and sustained high-speed gliding with near-zero fall rate.
-
-2. **Turning not yet trained**: Phase 4 deliberately removed all turning to focus on speed. A future Phase 5 could reintroduce `ang_vel_z` commands, `track_ang_vel` reward, and `edge_contact` reward — resuming from the Phase 4 `model_14000.pt` checkpoint.
-
-3. **AMP reference max speed is 3.0 m/s**: The curriculum pushes to 3.5 m/s but the AMP reference only covers up to 3.0 m/s. At higher speeds the AMP discriminator may penalize the motion style. Consider generating additional reference frames at 3.0–4.0 m/s, or reducing AMP blend weight at high speeds.
-
-4. **Velocity tracking error context**: At 3.5 m/s curriculum level, `error_vel_xy ≈ 3.10`. This is expected because the robot starts from rest each episode and spends several seconds accelerating. The steady-state tracking is much better than the episode average suggests.
-
----
-
-## 14. Hardware
+## 17. Hardware
 
 - Server: `phe108c-yuewang-02`
 - CPU: AMD EPYC 7763, 128 cores (256 logical)
 - RAM: 515 GB
-- GPUs: 8× NVIDIA RTX 6000 Ada Generation (48 GB each)
+- GPUs: **8× NVIDIA RTX 6000 Ada Generation (48 GB each)**
 - OS: Ubuntu 22.04, Kernel 5.15.0-131
 
-Training uses GPU 0 only. Multi-GPU training possible with `--distributed` flag.
+**Note on GPU sharing:** Server is shared; GPU memory is often nearly full across all 8 GPUs. The Eureka runner auto-selects the GPU with the most free VRAM for evaluation and waits 30s after training to allow memory release. Training uses `cuda:0` by default; override with `DEVICE=cuda:N`.

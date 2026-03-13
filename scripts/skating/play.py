@@ -54,11 +54,11 @@ parser.add_argument("--video", action="store_true", default=False)
 parser.add_argument("--video_length", type=int, default=500)
 parser.add_argument("--video_folder", type=str, default="videos/eval")
 parser.add_argument("--num_envs", type=int, default=64)
-parser.add_argument("--task", type=str, default="Unitree-G1-Skating-Phase3-v0",
+parser.add_argument("--task", type=str, default="Unitree-G1-Skating-Eureka-v0",
                     choices=[
                         "Unitree-G1-Skating-Phase1-v0",
-                        "Unitree-G1-Skating-Phase2-v0",
-                        "Unitree-G1-Skating-Phase3-v0",
+                        "Unitree-G1-Skating-Eureka-v0",
+                        "Unitree-G1-Skating-AMP-v0",
                     ])
 parser.add_argument("--seed", type=int, default=0)
 parser.add_argument("--eval_episodes", type=int, default=100,

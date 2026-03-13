@@ -58,12 +58,15 @@ class AmpDiscriminator(nn.Module):
             "tanh": nn.Tanh,
         }[activation]
 
+        # Spectral normalisation enforces the Lipschitz constraint on the
+        # discriminator without requiring create_graph=True autograd calls,
+        # which conflict with Isaac Sim / PhysX CUDA streams.
         layers: list[nn.Module] = []
         in_dim = amp_obs_dim
         for h in hidden_dims:
-            layers += [nn.Linear(in_dim, h), act_fn()]
+            layers += [nn.utils.spectral_norm(nn.Linear(in_dim, h)), act_fn()]
             in_dim = h
-        layers.append(nn.Linear(in_dim, 1))
+        layers.append(nn.utils.spectral_norm(nn.Linear(in_dim, 1)))
         self.net = nn.Sequential(*layers)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
@@ -324,6 +327,7 @@ class AmpOnPolicyRunner(OnPolicyRunner):
 
             # ── PPO update ────────────────────────────────────────────────────
             loss_dict = self.alg.update()
+            torch.cuda.synchronize()
 
             # ── Discriminator update ──────────────────────────────────────────
             disc_loss = self._update_discriminator()
@@ -348,6 +352,29 @@ class AmpOnPolicyRunner(OnPolicyRunner):
         # ── Final save ────────────────────────────────────────────────────────
         if self.log_dir is not None and not self.disable_logs:
             self.save(os.path.join(self.log_dir, f"model_{self.current_learning_iteration}.pt"))
+
+    # ── Checkpoint helpers ────────────────────────────────────────────────────
+
+    def save(self, path: str, infos=None):
+        """Save policy + discriminator state so both can be resumed together."""
+        super().save(path, infos)
+        # Augment checkpoint with discriminator weights and optimizer
+        ckpt = torch.load(path, weights_only=False)
+        ckpt["disc_state_dict"] = self.discriminator.state_dict()
+        ckpt["disc_optimizer_state_dict"] = self.disc_optimizer.state_dict()
+        torch.save(ckpt, path)
+
+    def load(self, path: str, load_optimizer: bool = True):
+        """Load policy; also restore discriminator if present in checkpoint."""
+        super().load(path, load_optimizer)
+        ckpt = torch.load(path, weights_only=False)
+        if "disc_state_dict" in ckpt:
+            self.discriminator.load_state_dict(ckpt["disc_state_dict"])
+            if load_optimizer and "disc_optimizer_state_dict" in ckpt:
+                self.disc_optimizer.load_state_dict(ckpt["disc_optimizer_state_dict"])
+            print("[AmpRunner] Discriminator state restored from checkpoint.")
+        else:
+            print("[AmpRunner] No discriminator state in checkpoint — starting fresh.")
 
     def _store_policy_amp_obs(self, amp_obs: torch.Tensor) -> None:
         """Write a batch of AMP observations into the policy ring buffer."""
@@ -381,7 +408,6 @@ class AmpOnPolicyRunner(OnPolicyRunner):
             if policy_batch is None:
                 break
 
-            expert_batch = expert_batch.requires_grad_(True)
             policy_batch = policy_batch.detach()
 
             # Binary cross-entropy: expert → 1, policy → 0
@@ -395,20 +421,20 @@ class AmpOnPolicyRunner(OnPolicyRunner):
                 logits_policy, torch.zeros_like(logits_policy)
             )
 
-            # Gradient penalty (Gulrajani et al.) on expert samples
-            grad = torch.autograd.grad(
-                outputs=logits_expert.sum(),
-                inputs=expert_batch,
-                create_graph=True,
-            )[0]
-            grad_penalty = (grad.norm(2, dim=1) - 1).pow(2).mean()
+            loss = loss_expert + loss_policy
 
-            loss = loss_expert + loss_policy + self._grad_pen_coef * grad_penalty
+            # Gradient penalty disabled: the create_graph=True required for WGAN-GP
+            # conflicts with Isaac Sim / PhysX CUDA streams and causes deadlocks.
+            # AMP converges reliably with BCE loss alone; GP can be re-enabled once
+            # Isaac Sim's CUDA stream synchronisation is better understood.
 
             self.disc_optimizer.zero_grad()
             loss.backward()
             nn.utils.clip_grad_norm_(self.discriminator.parameters(), 1.0)
             self.disc_optimizer.step()
+            # Synchronise CUDA streams after each discriminator step to prevent
+            # long-running autograd graphs from conflicting with Isaac Sim / PhysX.
+            torch.cuda.synchronize()
             total_loss += loss.item()
 
         return total_loss / max(self._disc_update_steps, 1)
